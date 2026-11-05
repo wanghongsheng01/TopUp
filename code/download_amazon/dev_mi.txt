@@ -1,0 +1,6 @@
+- **Category switched: Musical_Instruments instead of Office_Products.** The mirror delivered only ~1-1.6 MB/s aggregate (link-capped; 16-48 parallel range connections did not help) and the disk had ~3 GB (later <1 GB) free. Office_Products is 5.78 GB reviews + 2.15 GB metadata (~80+ min); Musical_Instruments (1.56 GB + 0.63 GB) was the largest catalogue of branded, priced, hierarchically-categorised products that fit the time budget. Arts_Crafts_and_Sewing (3.9+2.2 GB) was also infeasible; Industrial_and_Scientific is built separately in ../amazon2/.
+- Raw files were never stored: parallel HTTP range streaming with an on-the-fly timestamp/parent_asin filter (metadata kept only for parent_asins seen in the windows).
+- Text cleaning beyond whitespace normalisation: `<br />` tags and `[[VIDEOID:...]]` tokens replaced by spaces; the >=20-character rule is applied to the cleaned review body (title excluded). Exact duplicates on (user_id, parent_asin, timestamp) dropped.
+- ts is stored as naive UTC. Rating rounded to int. Price <= 0 or unparsable -> NaN -> cat1 "unknown". Missing store -> market "other-<area>".
+- Day coverage: uniform sample without replacement; a swap-in step would add one row for any uncovered day (see days_swapped_in in stats.json).
+- The dataset card states no licence (see above).

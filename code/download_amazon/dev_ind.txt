@@ -1,0 +1,6 @@
+- **Second category: Industrial_and_Scientific** (2.35 GB reviews + 1.13 GB metadata), as requested by the coordinator after the first build (amazon/ = Musical_Instruments, which replaced Office_Products for bandwidth reasons: mirror ~1-1.6 MB/s aggregate, disk <1-3 GB free). Office_Products and Arts_Crafts_and_Sewing (3.9+2.2 GB) were infeasible in the time budget.
+- Raw files were never stored: parallel HTTP range streaming with an on-the-fly timestamp/parent_asin filter (metadata kept only for parent_asins seen in the windows).
+- Text cleaning beyond whitespace normalisation: `<br />` tags and `[[VIDEOID:...]]` tokens replaced by spaces; the >=20-character rule is applied to the cleaned review body (title excluded). Exact duplicates on (user_id, parent_asin, timestamp) dropped.
+- ts is stored as naive UTC. Rating rounded to int. Price <= 0 or unparsable -> NaN -> cat1 "unknown". Missing store -> market "other-<area>".
+- Day coverage: uniform sample without replacement; a swap-in step would add one row for any uncovered day (see days_swapped_in in stats.json).
+- The dataset card states no licence (see above).
