@@ -239,4 +239,7 @@ if len(have) > 1:
             for m, tag in (("b5shared", "BFiveShared"), ("b5", "BFive"), ("b7", "BSeven"), ("a_lazy", "ALazy"), ("semview", "Sys")):
                 fh.write(f"\\newcommand{{\\NumCov{tag}}}{{{rng_(m, 0)}}}\n\\newcommand{{\\NumAcc{tag}}}{{{rng_(m, 1)}}}\n"
                          f"\\newcommand{{\\NumMet{tag}}}{{{rng_(m, 2, 2)}}}\n\\newcommand{{\\NumHwr{tag}}}{{{rng_(m, 3, 2)}}}\n")
+            fh.write(f"\\newcommand{{\\NumMetTolBFiveShared}}{{{rng_('b5shared', 4, 2)}}}\n")
+            cv = [v[0] for v in V.values()]
+            fh.write(f"\\newcommand{{\\NumCovAllMethods}}{{{min(cv):.3f}--{max(cv):.3f}}}\n")
     print("multi-dataset tables for", list(have))
