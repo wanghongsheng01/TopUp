@@ -47,7 +47,7 @@ L += ["\\bottomrule\\end{tabular}\\end{table}"]
 open(os.path.join(PAPER, "tables", "templates.tex"), "w").write("\n".join(L) + "\n")
 
 # maintenance and cost decomposition (oracle-label counts, price-independent)
-L = ["\\begin{table}[t]\\centering\\caption{Where \\sys{}'s labels go ($\\epsilon=0.05$, mean per run): oracle labels bought by the plan, by lazy top-ups and by the pilot, lazy raises per run, and the extra cost of relabelling every tuple whose row was updated after arrival (a proxy upper bound; real note edits are negligible, Section~\\ref{sec:exp}).}\\label{tab:maint}",
+L = ["\\begin{table}[t]\\centering\\caption{Where \\sys{}'s oracle labels go ($\\epsilon=0.05$, mean per run): bought by the plan, by lazy top-ups and by the pilot; lazy raises; and the extra cost of relabelling every row updated after arrival (an upper bound, Section~\\ref{sec:exp}).}\\label{tab:maint}",
      "\\setlength{\\tabcolsep}{2.5pt}\\small\\begin{tabular}{lrrrrrr}\\toprule Data & tuples & plan & lazy & pilot & raises & edits\\\\ \\midrule"]
 for lab, d in R.items():
     runs = d["05"]["runs"]; c = lambda k: mean([x["semview"]["counts"][k] for x in runs])
@@ -60,7 +60,7 @@ open(os.path.join(PAPER, "tables", "maintenance.tex"), "w").write("\n".join(L) +
 # contrasts on all datasets
 names = {"mom": "month", "yoy": "year", "pp30": "30d/30d", "roll7": "rolling"}
 short = {"RMA": "RMA", "Amazon-MI": "MI", "Amazon-IS": "IS"}
-L = ["\\begin{table}[t]\\centering\\caption{Comparison queries (T8) at $\\epsilon=0.05$ (MI, IS: Amazon-MI, Amazon-IS; variants: prior month, same month of the previous year, 30 days vs.\\ prior 30 days, rolling 30 days 7 days apart): coverage of the difference (floored) and of the delta-method ratio, and the variance of the coordinated synopsis relative to independent per-window samples at the same rates, predicted by Theorem~\\ref{thm:contrast}(b) with true residuals and measured across 40 PRN salts (both averaged over queries; the measured value is a 5\\%-trimmed mean).}\\label{tab:contrast_all}",
+L = ["\\begin{table}[t]\\centering\\caption{Comparison queries (T8), $\\epsilon=0.05$: coverage of the difference (floored) and of the ratio, and the variance of the coordinated synopsis relative to independent per-window samples, predicted by Theorem~\\ref{thm:contrast}(b) and measured over 40 PRN salts (5\\%-trimmed mean over queries). Variants are defined in Section~\\ref{sec:exp}.}\\label{tab:contrast_all}",
      "\\setlength{\\tabcolsep}{3pt}\\small\\begin{tabular}{llrrrrr}\\toprule Data & variant & queries & diff. & ratio & pred. & meas.\\\\ \\midrule"]
 for lab, d in R.items():
     T = pooled_t8(d["05"]["runs"])
