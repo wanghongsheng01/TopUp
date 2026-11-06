@@ -72,7 +72,7 @@ N = {
     "NumOracleShare": f"{(cnt(r05, 'oracle_main') - cnt(r05, 'oracle_hist') + cnt(r05, 'pilot')) / n_cur:.0%}".replace("%", "\\%"),
     "NumVsOfull": f"{np.mean(sv05) / ofull(R05, 'llm_oracle'):.2f}$\\times$",
     "NumVsOfullHuman": f"{np.mean(sv05h) / ofull(R05, 'human'):.2f}$\\times$",
-    "NumVsOfullMinsup": f"{np.mean(tot(rms, 'semview')) / ofull(RMS, 'llm_oracle'):.2f}$\\times$",
+    "NumVsOfullMinsup": f"{np.mean(tot(rms, 'semview', 'human_oracle')) / ofull(RMS, 'human'):.2f}$\\times$",  # same (human) price as NumVsOfullHuman
     "NumOfullGap": f"{ofull(R05, 'llm_oracle') / np.mean(sv05):.1f}$\\times$",
     "NumSensRange": f"{min(sens_r):.3f}--{max(sens_r):.3f}" if sens_r else "--",
     "NumBSevenX": f"{1 / ratio(r05, 'b7'):.2f}$\\times$", "NumALazyX": f"{1 / ratio(r05, 'a_lazy'):.2f}$\\times$",
