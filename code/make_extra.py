@@ -18,9 +18,9 @@ def pooled_t8(runs):
     agg = {}
     for x in runs:
         for var, d in x["semview"]["quality"].get("T8", {}).items():
-            a = agg.setdefault(var, {"n": 0, "c": [0, 0], "c2": [0, 0], "rc": [0, 0], "vr": []})
+            a = agg.setdefault(var, {"n": 0, "c": [0, 0], "c2": [0, 0], "rc": [0, 0], "rc2": [0, 0], "vr": []})
             a["n"] += d["n"]
-            for k, kk in (("c", "cov"), ("c2", "cov2"), ("rc", "rcov")): a[k][0] += d[kk][0]; a[k][1] += d[kk][1]
+            for k, kk in (("c", "cov"), ("c2", "cov2"), ("rc", "rcov"), ("rc2", "rcov2")): a[k][0] += d[kk][0]; a[k][1] += d[kk][1]
             if d["vratio_mean"] is not None: a["vr"].append(d["vratio_mean"])
     # empirical Var(coordinated)/Var(independent): per query across PRN salts of its workload seed (measured, not Thm 2)
     emp = {}
@@ -33,6 +33,21 @@ def pooled_t8(runs):
     for var, rr in emp.items():
         # 5%-trimmed mean over queries: same aggregate as the prediction (mean over queries), robust to the noise of 40-salt variances
         if var in agg: agg[var]["emp"] = float(trim_mean(rr, 0.05))
+    # pooled form (v7 records carry each query's design variances): predicted sum Var_coord / sum Var_indep over all queries,
+    # measured sum of across-salt variances of the coordinated and independent estimates; a ratio of sums has no F-ratio bias
+    if runs and "t8err" in runs[0]["semview"]["quality"] and len(runs[0]["semview"]["quality"]["t8err"][0]) == 5:
+        pn, pd_, mn, md = {}, {}, {}, {}
+        for x in runs:
+            for r in x["semview"]["quality"]["t8err"]:
+                pn[r[0]] = pn.get(r[0], 0) + r[3]; pd_[r[0]] = pd_.get(r[0], 0) + r[4]
+        for ws in sorted({x["wseed"] for x in runs}):
+            Rr = [x["semview"]["quality"]["t8err"] for x in runs if x["wseed"] == ws]
+            for i in range(len(Rr[0])):
+                v = Rr[0][i][0]
+                mn[v] = mn.get(v, 0) + np.var([r[i][1] for r in Rr]); md[v] = md.get(v, 0) + np.var([r[i][2] for r in Rr])
+        for v in agg:
+            if v in pn and pd_[v] > 0 and md.get(v, 0) > 0:
+                agg[v]["pred_pooled"] = pn[v] / pd_[v]; agg[v]["meas_pooled"] = mn[v] / md[v]
     return agg
 
 
@@ -47,27 +62,28 @@ L += ["\\bottomrule\\end{tabular}\\end{table}"]
 open(os.path.join(PAPER, "tables", "templates.tex"), "w").write("\n".join(L) + "\n")
 
 # maintenance and cost decomposition (oracle-label counts, price-independent)
-L = ["\\begin{table}[t]\\centering\\caption{Where \\sys{}'s oracle labels go ($\\epsilon=0.05$, mean per run): bought by the plan, by lazy top-ups and by the pilot; lazy raises; and the extra cost of relabelling every row updated after arrival (an upper bound, Section~\\ref{sec:exp}).}\\label{tab:maint}",
-     "\\setlength{\\tabcolsep}{2.5pt}\\small\\begin{tabular}{lrrrrrr}\\toprule Data & tuples & plan & lazy & pilot & raises & edits\\\\ \\midrule"]
+L = ["\\begin{table}[t]\\centering\\caption{Where \\sys{}'s oracle labels go ($\\epsilon=0.05$, mean per run): bought by the plan, by lazy top-ups and by the pilot, and the number of lazy raises.}\\label{tab:maint}",
+     "\\setlength{\\tabcolsep}{2.5pt}\\small\\begin{tabular}{lrrrrr}\\toprule Data & tuples & plan & lazy & pilot & raises\\\\ \\midrule"]
 for lab, d in R.items():
     runs = d["05"]["runs"]; c = lambda k: mean([x["semview"]["counts"][k] for x in runs])
     edit = mean([x["semview"]["cost"]["human_oracle"]["total_with_edits"] / x["semview"]["cost"]["human_oracle"]["total"] - 1 for x in runs])
     L.append(f"{lab} & {d['05']['n_tuples']:,} & {c('plan_only'):,.0f} & {c('oracle_main') - c('plan_only'):,.0f} & {c('pilot'):,.0f} & "
-             f"{mean([x['semview']['lazy'] for x in runs]):.0f} & +{edit:.0%}\\\\".replace(",", "{,}").replace("%", "\\%"))
+             f"{mean([x['semview']['lazy'] for x in runs]):.0f}\\\\".replace(",", "{,}"))
 L += ["\\bottomrule\\end{tabular}\\end{table}"]
 open(os.path.join(PAPER, "tables", "maintenance.tex"), "w").write("\n".join(L) + "\n")
 
 # contrasts on all datasets
 names = {"mom": "month", "yoy": "year", "pp30": "30d/30d", "roll7": "rolling"}
 short = {"RMA": "RMA", "Amazon-MI": "MI", "Amazon-IS": "IS"}
-L = ["\\begin{table}[t]\\centering\\caption{Comparison queries (T8), $\\epsilon=0.05$: coverage of the difference (floored) and of the ratio, and the variance of the coordinated synopsis relative to independent per-window samples, predicted by Theorem~\\ref{thm:contrast}(b) and measured over 40 PRN salts (5\\%-trimmed mean over queries). Variants are defined in Section~\\ref{sec:exp}.}\\label{tab:contrast_all}",
-     "\\setlength{\\tabcolsep}{3pt}\\small\\begin{tabular}{llrrrrr}\\toprule Data & variant & queries & diff. & ratio & pred. & meas.\\\\ \\midrule"]
+L = ["\\begin{table}[t]\\centering\\caption{Comparison queries (T4), $\\epsilon=0.05$: coverage of floored difference and ratio intervals; variance of the coordinated synopsis relative to independent per-window samples, predicted by Theorem~\\ref{thm:contrast}(b) and measured over 40 PRN salts, pooled over queries. Variants are defined in Section~\\ref{sec:exp}.}\\label{tab:contrast_all}",
+     "\\setlength{\\tabcolsep}{3pt}\\small\\begin{tabular}{llrrrr}\\toprule Data & variant & queries & diff. & ratio & Var ratio (pred./meas.)\\\\ \\midrule"]
 for lab, d in R.items():
-    T = pooled_t8(d["05"]["runs"])
+    f7 = os.path.join(RES, "v7", f"matched_{dict(DS)[lab]}_eps05.json")
+    T = pooled_t8(json.load(open(f7))["runs"] if os.path.exists(f7) else d["05"]["runs"])
     for var in ("mom", "yoy", "pp30", "roll7"):
         if var not in T: continue
         a = T[var]
-        L.append(f"{short[lab]} & {names[var]} & {a['n']:,} & {a['c2'][1] / a['c2'][0]:.3f} & {a['rc'][1] / max(a['rc'][0], 1):.3f} & {mean(a['vr']):.3f} & {a.get('emp', float('nan')):.3f}\\\\".replace(",", "{,}"))
+        L.append(f"{short[lab]} & {names[var]} & {a['n']:,} & {a['c2'][1] / a['c2'][0]:.3f} & {a['rc2'][1] / max(a['rc2'][0], 1):.3f} & {a.get('pred_pooled', mean(a['vr'])):.3f} / {a.get('meas_pooled', a.get('emp', float('nan'))):.3f}\\\\".replace(",", "{,}"))
 L += ["\\bottomrule\\end{tabular}\\end{table}"]
 open(os.path.join(PAPER, "tables", "contrast_all.tex"), "w").write("\n".join(L) + "\n")
 

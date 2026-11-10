@@ -38,10 +38,13 @@ if os.environ.get("SV_YOY", "") == "1": T8_VARIANTS["yoy"] = None  # last month 
 SLICE_TYPES = [("area",), ("market",), ("cat1",), ("area", "cat1"), ("market", "cat1")]
 WINDOWS = ["last7", "last30", "last_month"]
 KRES = float(os.environ.get("SV_KRES", 0))  # CLT guardrail: expected sampled non-zero residuals per query (0 = off)
-MIN_SUPPORT, M_MIN, PI_MIN, PILOT_N, KAPPA = int(os.environ.get("SV_MINSUP", 50)), int(os.environ.get("SV_MMIN", 30)), 0.01, 400, 10
+MIN_SUPPORT, M_MIN, PI_MIN, PILOT_N, KAPPA = int(os.environ.get("SV_MINSUP", 50)), int(os.environ.get("SV_MMIN", 30)), 0.01, int(os.environ.get("SV_PILOT", 400)), float(os.environ.get("SV_KAPPA", 10))
 
 
 EPS = 0.05
+SKIP = os.environ.get("SV_SKIP", "") == "1"  # scale-up runs: only the shared methods and B5-shared
+EXTRA = [m for m in os.environ.get("SV_EXTRA", "").split(",") if m]  # e.g. "a_lazy@1.5,cong"
+GAMMAS = [float(g) for g in os.environ.get("SV_GAMMAS", "").split(",") if g]  # B5-shared sample inflation factors
 
 
 def arg(name, default, cast=float):
@@ -95,6 +98,9 @@ def finish(p):
     p["area"] = p.area_name
     p["h"] = pd.factorize(p.market + "|" + p.cat1)[0]
     p["week"] = (p.day - p.day.min()) // 7
+    k = int(os.environ.get("SV_SCALE", 1))  # scale-up: every tuple replicated k times (same strata, new keys and random numbers)
+    if k > 1:
+        p = pd.concat([p.assign(key=p.key.astype(str) + f"#{i}") for i in range(k)], ignore_index=True)
     return p
 
 
@@ -280,14 +286,14 @@ def guard_ok(pt, pr):
     return KRES <= 0 or (pt >= 1).all() or (pt * pr).sum() >= KRES
 
 
-def eval_t8(q, pi_cell, cell, h, f, M, Yoh, U, eps, pres=None, U2=None, lazy=True):
+def eval_t8(q, pi_cell, cell, h, f, M, Yoh, U, eps, pres=None, U2=None, lazy=True, gam=1.0):
     """Period-over-period contrast on the shared synopsis (coordinated PRN design across both windows)."""
     idx = q["idx"]; r = q["r"]; w, in1, in2 = contrast_weights(q)
     ci = cell[idx]; hi = h[idx]; N1, N2 = len(q["idx1"]), len(q["idx2"])
 
     def ok(pc):
         pt = pc[ci]
-        if (w ** 2 * M[hi, r] * (1 / pt - 1)).sum() > (eps / Z) ** 2: return False
+        if (w ** 2 * M[hi, r] * (1 / pt - 1)).sum() > (eps / Z) ** 2 / gam: return False
         if pres is not None and not (guard_ok(pt[in1], pres[hi[in1]]) and guard_ok(pt[in2], pres[hi[in2]])): return False
         return pt[in1].sum() >= min(M_MIN, N1) and pt[in2].sum() >= min(M_MIN, N2)
 
@@ -309,10 +315,14 @@ def eval_t8(q, pi_cell, cell, h, f, M, Yoh, U, eps, pres=None, U2=None, lazy=Tru
     t1, v1 = part(in1, N1); t2, v2 = part(in2, N2)
     c12 = (e ** 2 * I * (1 - pt) / pt ** 2)[in1 & in2].sum() / (N1 * N2)
     T1, T2 = y[in1].mean(), y[in2].mean()
-    rcov = None
+    rcov = None; rcov2 = None
     if T2 >= 0.05 and t2 > 0:
         R = t1 / t2; vr = max(v1 + R ** 2 * v2 - 2 * R * c12, 0) / t2 ** 2
         rcov = bool(abs(R - T1 / T2) <= Z * np.sqrt(vr) + 1e-9)
+        # floored ratio interval: the same delta-method form with the pilot plug-in design variances, as for differences
+        dp = M[hi, r] * (1 / pt - 1)
+        vr_pl = max(dp[in1].sum() / N1 ** 2 + R ** 2 * dp[in2].sum() / N2 ** 2 - 2 * R * dp[in1 & in2].sum() / (N1 * N2), 0) / t2 ** 2
+        rcov2 = bool(abs(R - T1 / T2) <= Z * np.sqrt(max(vr, vr_pl)) + 1e-9)
     # design variance (true residuals) of the coordinated contrast vs. independent designs for the two windows
     d = e ** 2 * (1 / pt - 1)
     vind = (d[in1].sum() / N1 ** 2) + (d[in2].sum() / N2 ** 2); vco = (w ** 2 * d).sum()
@@ -326,13 +336,15 @@ def eval_t8(q, pi_cell, cell, h, f, M, Yoh, U, eps, pres=None, U2=None, lazy=Tru
     rec = {"t": "T8", "N": len(idx), "st": "x".join(q["st"]), "w": q["w"], "n0": int(I.sum()), "err": float(est - truth),
            "err_ind": err_ind,
            "cov": [bool(abs(est - truth) <= Z * np.sqrt(var) + 1e-9)], "cov2": [bool(abs(est - truth) <= Z * np.sqrt(vc) + 1e-9)],
-           "hw": [float(Z * np.sqrt(var))], "hw2": [float(Z * np.sqrt(vc))], "rcov": rcov,
-           "vratio": float(vco / vind) if vind > 0 else None}
+           "hw": [float(Z * np.sqrt(var))], "hw2": [float(Z * np.sqrt(vc))], "rcov": rcov, "rcov2": rcov2,
+           "vratio": float(vco / vind) if vind > 0 else None, "vco": float(vco), "vind": float(vind)}
     return pi_cell, rec, raised
 
 
 # ------------------------------------------------------------------ one replay of a shared-synopsis method
 def run_shared(p, qs, X, Yoh, U, V, mode, eps, masks, vals, rng, U2=None):
+    gam = float(mode.split("@")[1]) if "@" in mode else 1.0  # variance margin of the lazy rule (matched-certification runs)
+    mode = mode.split("@")[0]
     lazy = mode != "p_only"  # p_only: the proactive plan alone, no query-time top-ups
     n, H = len(p), p.h.max() + 1
     h, day, week, ed = p.h.values, p.day.values, p.week.values, p.edit_day.values
@@ -352,6 +364,15 @@ def run_shared(p, qs, X, Yoh, U, V, mode, eps, masks, vals, rng, U2=None):
         nu = np.bincount(h[cur], minlength=H) / (upto + 1)
         if mode == "a_lazy":
             pi = np.full(H, PI_MIN)
+        elif mode == "cong":  # capped stratified sample: every stratum gets at least K expected tuples per 30 days, smallest feasible K
+            A, b = constraints(p, masks, vals, nu, f, M, Md, eps, upto)
+            rate = lambda K: np.clip(K / np.maximum(30 * nu, 1e-9), PI_MIN, 1.0)
+            lo, hi_ = 0.0, 30 * nu.max() + 1
+            for _ in range(60):
+                mid = (lo + hi_) / 2
+                if ((A @ (1 / rate(mid) - 1)) <= b * (1 + 1e-9)).all(): hi_ = mid
+                else: lo = mid
+            pi = rate(hi_)
         else:
             A, b = constraints(p, masks, vals, nu, f, M, Md, eps, upto)
             pi = solve(A, b, nu, uniform=(mode == "b7"))  # oracle price only rescales the objective
@@ -370,7 +391,7 @@ def run_shared(p, qs, X, Yoh, U, V, mode, eps, masks, vals, rng, U2=None):
             f, M, Md, pil2, pi, pres = plan(60); pilots |= set(pil2.tolist())
             pi_plan = np.maximum(pi_plan, np.where(cur_cell, np.repeat(pi, NW), 0)); pi_cell = np.maximum(pi_cell, pi_plan)
         if q["t"] == "T8":
-            pi_cell, rec, raised = eval_t8(q, pi_cell, cell, h, f, M, Yoh, U, eps, pres, U2, lazy)
+            pi_cell, rec, raised = eval_t8(q, pi_cell, cell, h, f, M, Yoh, U, eps, pres, U2, lazy, gam)
             stats["lazy_raises"] += raised; out.append(rec); continue
         idx = q["idx"]; N = len(idx); ci = cell[idx]; hi = h[idx]
         if q["t"] == "T1": targets = [("r", q["r"])]
@@ -381,8 +402,8 @@ def run_shared(p, qs, X, Yoh, U, V, mode, eps, masks, vals, rng, U2=None):
         def pred_ok(pc):
             pt = pc[ci]; inv = 1 / pt - 1
             for tg in targets:
-                if tg[0] == "r": v = (M[hi, tg[1]] * inv).sum() / N ** 2; lim = (eps / Z) ** 2
-                else: v = (Md[hi, tg[1] * C + tg[2]] * inv).sum() / N ** 2; lim = (tg[3] / Z) ** 2
+                if tg[0] == "r": v = (M[hi, tg[1]] * inv).sum() / N ** 2; lim = (eps / Z) ** 2 / gam
+                else: v = (Md[hi, tg[1] * C + tg[2]] * inv).sum() / N ** 2; lim = (tg[3] / Z) ** 2 / gam
                 if v > lim: return False
             if not guard_ok(pt, pres[hi]): return False
             return pt.sum() >= min(M_MIN, N)
@@ -561,7 +582,7 @@ def summarise_base(recs, eps):
     return out
 
 
-def run_b5shared(p, qs, X, Yoh, V, eps, c0, c1, rng, fallback=0.8):
+def run_b5shared(p, qs, X, Yoh, V, eps, c0, c1, rng, fallback=0.8, gamma=1.0):
     """B5-shared: a realistic per-query planner. One shared pilot (same size and refresh as TopUp's) gives surrogates and
     per-stratum residual moments; each query scans the cheap bundle (cached), sizes a fresh SRS of oracle labels from the
     pilot moments, and labels the whole slice exactly when the planned sample exceeds `fallback` of it. Labels are cached."""
@@ -594,7 +615,7 @@ def run_b5shared(p, qs, X, Yoh, V, eps, c0, c1, rng, fallback=0.8):
             else:
                 fb = f[ii].mean(0); o = np.argsort(-fb); g = max(fb[o[0]] - fb[o[1]], eps)
                 S2 = [Md[hi, o[0] * C + o[1]].mean() * (eps / g) ** 2]  # separation target rescaled to the eps budget
-            need = max([int(np.ceil(N * s / (N * V0 + s))) if s > 0 else 0 for s in S2] + [min(10, N)])
+            need = max([int(np.ceil(N * s / (N * V0 / gamma + s))) if s > 0 else 0 for s in S2] + [min(10, N)])  # gamma: inflation
             samp = ii if need > fallback * N else rng.choice(ii, need, replace=False)
             k, c = buy(samp, tau, c0, or_day); total += c; n_or += k
             k, c = buy(ii, tau, c1, ch_day); total += c
@@ -665,15 +686,17 @@ def summarise(recs):
     if len(t8):
         out["T8"] = {}
         for var, s in t8.groupby("w"):
-            rc = s.rcov.dropna()
+            rc = s.rcov.dropna(); rc2 = s.rcov2.dropna()
             vr = s.vratio.dropna()
             out["T8"][var] = {"n": int(len(s)), "cov": [int(len(s)), int(sum(c[0] for c in s["cov"]))],
                               "cov2": [int(len(s)), int(sum(c[0] for c in s["cov2"]))],
                               "rcov": [int(len(rc)), int(rc.astype(bool).sum())],
+                              "rcov2": [int(len(rc2)), int(rc2.astype(bool).sum())],
                               "vratio_mean": float(vr.mean()) if len(vr) else None,
                               "hw_mean": float(np.mean([c[0] for c in s.hw]))}
     if len(t8) and "err_ind" in t8:
-        out["t8err"] = [[w_, round(a_, 6), None if b_ is None else round(b_, 6)] for w_, a_, b_ in zip(t8.w, t8.err, t8.err_ind)]
+        out["t8err"] = [[w_, round(a_, 6), None if b_ is None else round(b_, 6), float(c_), float(d_)]
+                        for w_, a_, b_, c_, d_ in zip(t8.w, t8.err, t8.err_ind, t8.vco, t8.vind)]
     hw = [x for r in df[~df.t.isin(["T3", "T8"])].hw for x in r]
     out["mean_halfwidth"] = float(np.mean(hw)); out["mean_n0_per_query"] = float(df.n0.mean())
     # target attainment: share of T1/T2/T8 targets whose floored half-width is within eps
@@ -700,7 +723,7 @@ def main():
             rng = np.random.default_rng(10_000 * ws + s)
             U = rng.random(len(p)); V = rng.random(len(p)); U2 = rng.random(len(p))
             run = {"wseed": ws, "salt": s, "n_queries": len(qs)}
-            for mode in ["semview", "b7", "a_lazy", "p_only"]:
+            for mode in ["semview", "b7", "a_lazy", "p_only"] + EXTRA:
                 recs, cnt, st = run_shared(p, qs, X, Yoh, U, V, mode, eps, masks, vals, np.random.default_rng(s), U2)
                 cost = {}
                 for pname, c0 in prices.items():
@@ -709,6 +732,10 @@ def main():
                                    "total_with_edits": base + cnt["edit_cheap"] * c1 + cnt["edit_oracle"] * c0}
                 run[mode] = {"counts": cnt, "cost": cost, "lazy": st["lazy_raises"], "quality": summarise(recs)}
             for pname, c0 in prices.items():
+                if SKIP:
+                    run["b5shared_" + pname] = run_b5shared(p, qs, X, Yoh, V, eps, c0, c1, np.random.default_rng(s))
+                    for g in GAMMAS: run[f"b5shared_g{g}_" + pname] = run_b5shared(p, qs, X, Yoh, V, eps, c0, c1, np.random.default_rng(s), gamma=g)
+                    continue
                 run["b4_" + pname] = run_ladder(p, qs, X, Yoh, np.random.default_rng(s), eps, c0, c1, cache=False)
                 run["b5_" + pname] = run_ladder(p, qs, X, Yoh, np.random.default_rng(s), eps, c0, c1, cache=True)
                 run["b4ideal_" + pname] = run_ladder(p, qs, X, Yoh, np.random.default_rng(s), eps, c0, c1, cache=False, ideal=True)

@@ -30,6 +30,7 @@ methods = [("semview", "TopUp"), ("b7", "B7 uniform"), ("b6", "B6 SemViews-ad.")
            ("b5shared", "B5-shared"), ("olazy", "O-lazy (exact)"), ("b4", "B4 Ladder")]
 cols = PAL[:5] + ["#c9a227", "#9a9893"]
 fig, ax = plt.subplots(figsize=(3.4, 2.1))
+YMAX = 2400
 w = 0.84 / len(methods); xs = np.arange(len(R))
 for i, (m, name) in enumerate(methods):
     vals = []
@@ -39,8 +40,13 @@ for i, (m, name) in enumerate(methods):
             vals.append(json.load(open(f))["touched_mean"] * 0.05 if os.path.exists(f) else np.nan)
         else:
             vals.append(tot(r["runs"], m, "human_oracle").mean())
-    ax.bar(xs + i * w - 0.42 + w / 2, vals, w, label=name, color=cols[i])
-ax.set_yscale("log"); ax.set_xticks(xs); ax.set_xticklabels(list(R)); ax.set_ylabel("labelling cost (\\$)")
+    xb = xs + i * w - 0.42 + w / 2
+    if m == "b4":  # per-query re-planning is 10x higher: clip the bar and print its value, so the other bars stay readable
+        ax.bar(xb, [min(v, YMAX) for v in vals], w, label=name, color=cols[i], hatch="////", edgecolor="white", lw=0)
+        for x_, v in zip(xb, vals): ax.text(x_, YMAX * 1.01, f"{v / 1000:.1f}k", ha="center", va="bottom", fontsize=5, rotation=90)
+    else:
+        ax.bar(xb, vals, w, label=name, color=cols[i])
+ax.set_ylim(0, YMAX * 1.18); ax.set_xticks(xs); ax.set_xticklabels(list(R)); ax.set_ylabel("labelling cost (\\$)")
 ax.legend(ncol=4, fontsize=5.5, loc="upper center", bbox_to_anchor=(0.5, -0.14), handlelength=1.2, columnspacing=0.8)
 fig.tight_layout(); fig.savefig(os.path.join(FIG, "fig_cost.pdf"), bbox_inches="tight"); plt.close(fig)
 
@@ -54,8 +60,10 @@ for i, (lab, r) in enumerate(R.items()):
     nor = np.mean([x["semview"]["counts"]["oracle_main"] + x["semview"]["counts"]["pilot"] for x in r["runs"]])
     ax.plot(kap, c["cheap_scan"] / (ncur * kap) + nor / ncur, color=PAL[i], label=lab)
 ax.axhline(1, color="#52514e", lw=0.8, ls="--"); ax.set_xscale("log"); ax.set_ylim(0, 1.5)
+for k_, lab_ in ((13, "LLM oracle"), (600, "human review")):  # measured price ratios on RMA
+    ax.axvline(k_, color="#9a9893", lw=0.7, ls=":"); ax.text(k_ * 1.15, 1.35, lab_, fontsize=5.5, color="#52514e")
 ax.set_xlabel(r"oracle / cheap-bundle price ratio $\kappa=c_0/c_1$"); ax.set_ylabel("TopUp cost / O-full")
-ax.legend(fontsize=6, loc="lower left"); fig.tight_layout(); fig.savefig(os.path.join(FIG, "fig_phase.pdf"), bbox_inches="tight"); plt.close(fig)
+ax.legend(fontsize=6, ncol=3, loc="lower center", bbox_to_anchor=(0.5, 1.0)); fig.tight_layout(); fig.savefig(os.path.join(FIG, "fig_phase.pdf"), bbox_inches="tight"); plt.close(fig)
 
 # Fig. coverage: coverage by slice-size bucket, HT vs floored interval (first dataset)
 lab, r = next(iter(R.items()))
@@ -68,6 +76,6 @@ for j, (key, name) in enumerate((("groups", "HT"), ("groups2", "floored"))):
             b = k.split("|")[1]; agg[b][0] += n; agg[b][1] += cv
     ax.plot(range(len(buckets)), [agg[b][1] / agg[b][0] for b in buckets], marker="os"[j], color=PAL[j], label=name)
 ax.axhline(0.95, color="#52514e", lw=0.8, ls="--"); ax.set_xticks(range(len(buckets))); ax.set_xticklabels(buckets)
-ax.set_xlabel("slice size (tuples)"); ax.set_ylabel(f"coverage ({lab})"); ax.set_ylim(0.8, 1.0); ax.legend(fontsize=6)
+ax.set_xlabel("slice size (tuples)"); ax.set_ylabel(f"coverage ({lab})"); ax.set_ylim(0.8, 1.0); ax.legend(fontsize=6, ncol=2, loc="lower center", bbox_to_anchor=(0.5, 1.0))
 fig.tight_layout(); fig.savefig(os.path.join(FIG, "fig_coverage.pdf"), bbox_inches="tight"); plt.close(fig)
 print("wrote", os.listdir(FIG))

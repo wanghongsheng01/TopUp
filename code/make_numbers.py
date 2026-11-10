@@ -15,7 +15,7 @@ R05, R10, RMS = (json.load(open(f)) for f in (f05, f10, fms))
 
 
 def tot(runs, m, price="llm_oracle"):
-    if m in ("semview", "b7", "a_lazy", "p_only"): return np.array([x[m]["cost"][price]["total"] for x in runs])
+    if m in ("semview", "b7", "a_lazy", "p_only", "cong") or "@" in m: return np.array([x[m]["cost"][price]["total"] for x in runs])
     return np.array([x[f"{m}_{price}"]["total"] for x in runs])
 
 
@@ -78,7 +78,7 @@ N = {
     "NumBSevenX": f"{1 / ratio(r05, 'b7'):.2f}$\\times$", "NumALazyX": f"{1 / ratio(r05, 'a_lazy'):.2f}$\\times$",
     "NumALazyCov": f"{np.mean([x['a_lazy']['quality']['coverage'] for x in r05]):.3f}",
     "NumPlanShare": f"{cnt(r05, 'plan_only') / cnt(r05, 'oracle_main'):.0%}".replace("%", "\\%"),
-    "NumEditCost": f"+{np.mean([x['semview']['cost']['human_oracle']['total_with_edits'] / x['semview']['cost']['human_oracle']['total'] - 1 for x in r05]):.0%}".replace("%", "\\%"),
+    "NumEditCost": f"{np.mean([x['semview']['cost']['human_oracle']['total_with_edits'] / x['semview']['cost']['human_oracle']['total'] - 1 for x in r05]):.0%}".replace("%", "\\%"),
     "NumCzero": f"\\${R05['prices']['llm_oracle'] * 1000:.2f}", "NumCone": f"\\${R05['c1_bundle'] * 1000:.3f}",
     "NumApiSpend": f"\\${spend:.2f}",
     "NumWTone": "", "NumWTtwo": "", "NumWTthree": "", "NumWTeight": "",
@@ -125,7 +125,7 @@ open(os.path.join(PAPER, "tables", "validity.tex"), "w").write("\n".join(L) + "\
 
 # Table: contrasts
 names = {"mom": "Prior month", "yoy": "Previous year", "pp30": "30d vs.\\ preceding 30d", "roll7": "Rolling 30d, 7d apart"}
-L = ["\\begin{table}[t]\\centering\\caption{Comparison queries (T8) on RMA at $\\epsilon=0.05$: coverage of the difference (HT / floored) and of the ratio, and the variance of the coordinated synopsis relative to independent per-window samples.}\\label{tab:contrast}",
+L = ["\\begin{table}[t]\\centering\\caption{Comparison queries (T4) on RMA at $\\epsilon=0.05$: coverage of the difference (HT / floored) and of the ratio, and the variance of the coordinated synopsis relative to independent per-window samples.}\\label{tab:contrast}",
      "\\setlength{\\tabcolsep}{3pt}\\small\\begin{tabular}{lrrrrr}\\toprule Variant & overlap & queries & diff.\\ cov. & ratio cov. & Var ratio\\\\ \\midrule"]
 for var in ("mom", "yoy", "pp30", "roll7"):
     if var not in T: continue
@@ -225,7 +225,7 @@ if len(have) > 1:
                                     np.mean([z["target_met"] for z in q]), np.mean([z["hw_ratio_median"] for z in q]),
                                     np.mean([z["target_met_110"] for z in q]))
         json.dump({"|".join(k): v for k, v in V.items()}, open(os.path.join(RES, "validity_all_methods.json"), "w"), indent=0)
-        L = ["\\begin{table*}[t]\\centering\\caption{Validity at equal targets ($\\epsilon=0.05$, mean of %d runs): coverage of the floored 95\\%% interval (cov.), share of queries whose realised error is within $\\epsilon$ (acc.), and share of T1/T2/T8 targets whose certified half-width is within $\\epsilon$ (met). Per-query planners use the sample-variance interval of~\\cite{ladder}, floored by the pilot moments.}\\label{tab:basevalid}" % len(r05),
+        L = ["\\begin{table*}[t]\\centering\\caption{Validity at equal targets ($\\epsilon=0.05$, mean of %d runs): coverage of the floored 95\\%% interval (cov.), share of queries whose realised error is within $\\epsilon$ (acc.), and share of T1/T2/T4 targets whose certified half-width is within $\\epsilon$ (met). Per-query planners use the sample-variance interval of~\\cite{ladder}, floored by the pilot moments.}\\label{tab:basevalid}" % len(r05),
              "\\setlength{\\tabcolsep}{4pt}\\small\\begin{tabular}{l" + "rrr" * len(have) + "}\\toprule",
              " & " + " & ".join(f"\\multicolumn{{3}}{{c}}{{{lab}}}" for lab in have) + "\\\\",
              " " + "".join(f"\\cmidrule(lr){{{2 + 3 * i}-{4 + 3 * i}}}" for i in range(len(have))),
@@ -243,3 +243,97 @@ if len(have) > 1:
             cv = [v[0] for v in V.values()]
             fh.write(f"\\newcommand{{\\NumCovAllMethods}}{{{min(cv):.3f}--{max(cv):.3f}}}\n")
     print("multi-dataset tables for", list(have))
+
+
+# ------------------------------------------------------------------ v7: matched-validity rows (same 200 runs and seeds as Table I)
+# B5-shared with the smallest sample inflation gamma, and A-lazy with the smallest lazy-rule variance margin g, whose share of
+# certified targets (met) reaches TopUp's and whose realised-error share (acc) is >= 0.95; plus a capped stratified design.
+V7 = os.environ.get("SV_V7DIR", os.path.join(RES, "v7"))
+v7 = {lab: {e: json.load(open(os.path.join(V7, f"matched_{k}_eps{e}.json")))["runs"] for e in ("05", "10")}
+      for lab, k in DS if all(os.path.exists(os.path.join(V7, f"matched_{k}_eps{e}.json")) for e in ("05", "10"))}
+if len(v7) == 3:
+    GAM = ("1.5", "2.0", "2.5", "3.0"); GA = ("1.5", "2", "2.5")
+    qual7 = lambda runs, m: [x[m]["quality"] if m in x else x[f"{m}_human_oracle"]["quality"] for x in runs]
+    def vstats(runs, m, e):
+        q = qual7(runs, m)
+        return (np.mean([z["coverage_cons"] for z in q]), np.mean([np.mean(np.abs(z["qerr"]) <= int(e) / 100 + 1e-12) for z in q]),
+                np.mean([z["target_met"] for z in q]))
+    pick = {}
+    for lab in v7:
+        for e in ("05", "10"):
+            runs = v7[lab][e]; met_s = vstats(runs, "semview", e)[2]
+            for fam, cands in (("b5shared", [f"b5shared_g{g}" for g in GAM]), ("a_lazy", [f"a_lazy@{g}" for g in GA])):
+                ok = [c for c in cands if vstats(runs, c, e)[2] >= met_s - 1e-9 and vstats(runs, c, e)[1] >= 0.95]
+                pick[(lab, e, fam)] = ok[0] if ok else cands[-1]
+    print("matched picks:", pick)
+    json.dump({"|".join(k): v for k, v in pick.items()}, open(os.path.join(RES, "v7_picks.json"), "w"), indent=0)
+    # Table I with the matched rows
+    rows = [("semview", "\\sys"), ("p_only", "\\sys{} plan only"), ("b7", "B7 uniform"), ("cong", "Capped stratified"),
+            ("a_lazy", "A-lazy"), ("a_lazy*", "A-lazy, matched"), ("b6", "B6 SemViews-ad."), ("b5", "B5 Ladder+cache"),
+            ("b5shared", "B5-shared"), ("b5shared*", "B5-shared, matched"), ("b5ideal", "B5-ideal"), ("b4", "B4 Ladder")]
+    L = ["\\begin{table*}[t]\\centering\\caption{Total labelling cost over the 62-day horizon (human-oracle price, \\$0.05 per label; mean of %d runs) and, in parentheses, \\sys's cost relative to each method (paired). Rows marked \\emph{matched} raise the method's sample sizes (Section~\\ref{sec:setup}) until it certifies at least as many targets as \\sys{} with realised errors within $\\epsilon$ for at least 95\\%% of the queries, or to the largest factor tried if none does.}\\label{tab:cost}" % len(v7["RMA"]["05"]),
+         "\\small\\begin{tabular}{l" + "rr" * 3 + "}\\toprule",
+         " & " + " & ".join(f"\\multicolumn{{2}}{{c}}{{{lab}}}" for lab in v7) + "\\\\",
+         " & " + " & ".join("$\\epsilon=0.05$ & $\\epsilon=0.10$" for _ in v7) + "\\\\ \\midrule"]
+    for m, name in rows:
+        cells = []
+        for lab in v7:
+            for e in ("05", "10"):
+                mm = pick[(lab, e, m[:-1])] if m.endswith("*") else m
+                d = v7[lab][e] if (m.endswith("*") or m == "cong") else have[lab][e]
+                c = np.mean(tot(d, mm, "human_oracle")); rr = ratio(d, mm, "human_oracle")
+                cells.append(f"{c:,.0f}" + ("" if m == "semview" else f" ({rr:.2f})"))
+        L.append(f"{name} & " + " & ".join(cells) + "\\\\")
+    cells = []
+    for lab in v7:
+        n = have[lab]["05"][0]["semview"]["counts"]["cheap_scan"]
+        for e in ("05", "10"): cells.append(f"{n * 0.05:,.0f} ({np.mean(tot(have[lab][e], 'semview', 'human_oracle')) / (n * 0.05):.2f})")
+    L.append("O-full & " + " & ".join(cells) + "\\\\")
+    cells = []
+    for lab in v7:
+        ol = json.load(open(os.path.join(RES, f"olazy_{dict(DS)[lab]}.json")))["touched_mean"] * 0.05
+        for e in ("05", "10"): cells.append(f"{ol:,.0f} ({np.mean(tot(have[lab][e], 'semview', 'human_oracle')) / ol:.2f})")
+    L.append("O-lazy & " + " & ".join(cells) + "\\\\")
+    L += ["\\bottomrule\\end{tabular}\\end{table*}"]
+    open(os.path.join(PAPER, "tables", "main_cost.tex"), "w").write("\n".join(L).replace(",", "{,}") + "\n")
+    # Table II for both targets, with the matched rows
+    vrows = [("semview", "\\sys"), ("p_only", "\\sys{} plan only"), ("b7", "B7 uniform"), ("cong", "Capped stratified"), ("a_lazy", "A-lazy"),
+             ("a_lazy*", "A-lazy, matched"), ("b5shared", "B5-shared"), ("b5shared*", "B5-shared, matched"), ("b5", "B5 Ladder+cache")]
+    VV = {}
+    for e in ("05", "10"):
+        for m, name in vrows:
+            for lab in v7:
+                mm = pick[(lab, e, m[:-1])] if m.endswith("*") else m
+                src = v7[lab][e] if (m.endswith("*") or m == "cong") else have[lab][e]
+                VV[(lab, e, m)] = vstats(src, mm, e)
+    covs = [v[0] for v in VV.values()]
+    L = ["\\begin{table*}[t]\\centering\\caption{Validity at equal targets (mean of %d runs): share of queries whose realised error is within $\\epsilon$ (acc.) and share of T1/T2/T4 targets whose certified half-width is within $\\epsilon$ (met). Per-query planners use the sample-variance interval of~\\cite{ladder}, floored by the pilot moments. The floored 95\\%% intervals of all methods cover at %.3f--%.3f.}\\label{tab:basevalid}" % (len(v7["RMA"]["05"]), min(covs), max(covs)),
+         "\\setlength{\\tabcolsep}{4pt}\\small\\begin{tabular}{l" + "rrrr" * 3 + "}\\toprule",
+         " & " + " & ".join(f"\\multicolumn{{4}}{{c}}{{{lab}}}" for lab in v7) + "\\\\",
+         " " + "".join(f"\\cmidrule(lr){{{2 + 4 * i}-{5 + 4 * i}}}" for i in range(3)),
+         " & " + " & ".join("\\multicolumn{2}{c}{$\\epsilon=0.05$} & \\multicolumn{2}{c}{$\\epsilon=0.10$}" for _ in v7) + "\\\\",
+         "Method & " + " & ".join("acc. & met & acc. & met" for _ in v7) + "\\\\ \\midrule"]
+    for m, name in vrows:
+        cells = [f"{VV[(lab, e, m)][1]:.3f} & {VV[(lab, e, m)][2]:.2f}" for lab in v7 for e in ("05", "10")]
+        L.append(f"{name} & " + " & ".join(cells) + "\\\\")
+    L += ["\\bottomrule\\end{tabular}\\end{table*}"]
+    open(os.path.join(PAPER, "tables", "basevalid.tex"), "w").write("\n".join(L) + "\n")
+    rng7 = lambda xs, d=2: f"{min(xs):.{d}f}" if f"{min(xs):.{d}f}" == f"{max(xs):.{d}f}" else f"{min(xs):.{d}f}--{max(xs):.{d}f}"
+    with open(os.path.join(PAPER, "numbers.tex"), "a") as fh:
+        for m, tag in (("b5shared*", "BFiveSharedMatched"), ("a_lazy*", "ALazyMatched"), ("cong", "Cong")):
+            rr = [ratio(v7[lab][e], pick[(lab, e, m[:-1])] if m.endswith("*") else m, "human_oracle") for lab in v7 for e in ("05", "10")]
+            fh.write(f"\\newcommand{{\\NumRatio{tag}}}{{{rng7(rr)}$\\times$}}\n")
+            fh.write(f"\\newcommand{{\\NumMet{tag}}}{{{rng7([VV[(lab, e, m)][2] for lab in v7 for e in ('05', '10')])}}}\n")
+            fh.write(f"\\newcommand{{\\NumAcc{tag}}}{{{rng7([VV[(lab, e, m)][1] for lab in v7 for e in ('05', '10')], 3)}}}\n")
+        gs = sorted({pick[(lab, e, 'b5shared')].split('_g')[1] for lab in v7 for e in ('05', '10')}, key=float)
+        fh.write(f"\\newcommand{{\\NumGammaRange}}{{{gs[0] if gs[0] == gs[-1] else gs[0] + '--' + gs[-1]}}}\n")
+        gl = sorted({pick[(lab, e, 'a_lazy')].split('@')[1] for lab in v7 for e in ('05', '10')}, key=float)
+        fh.write(f"\\newcommand{{\\NumGRange}}{{{gl[0] if gl[0] == gl[-1] else gl[0] + '--' + gl[-1]}}}\n")
+        rs = {}
+        for lab in v7:
+            for e in ("05", "10"):
+                cheaper = np.mean(tot(v7[lab][e], "semview", "human_oracle") < tot(v7[lab][e], pick[(lab, e, "b5shared")], "human_oracle"))
+                rs[f"{lab}{e}"] = float(cheaper)
+        fh.write(f"\\newcommand{{\\NumCheaperMatched}}{{{100 * min(rs.values()):.0f}\\%}}\n")
+        print("cheaper share vs matched B5-shared:", rs)
+    print("v7 tables written")
