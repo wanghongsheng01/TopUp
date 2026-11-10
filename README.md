@@ -1,6 +1,6 @@
 # TopUp: Workload-Aware Semantic Synopses — Artifact
 
-This repository accompanies the ICDE 2027 submission *TopUp: Maintaining Workload-Aware Semantic Synopses of LLM Labels with Error Guarantees over Evolving Data* (Hongsheng Wang).
+This repository accompanies the ICDE 2027 submission *TopUp: Maintaining Workload-Aware Semantic Synopses of LLM Labels with Error Guarantees over Evolving Data* (Hongsheng Wang and Dazhen Deng).
 
 ## Contents
 
