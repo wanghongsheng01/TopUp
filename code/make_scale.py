@@ -10,8 +10,8 @@ RES = os.path.join(HERE, "..", "results", "scale_g"); PAPER = os.path.join(HERE,
 m = lambda xs: float(np.mean(xs))
 HUMAN, EPS = 0.05, 0.05
 
-L = ["\\begin{table}[t]\\centering\\caption{Scale-up ($\\epsilon=0.05$, human-oracle price, mean of %d paired runs): every tuple replicated $k$ times with fresh random numbers. \\sys's cost relative to matched B5-shared (Table~\\ref{tab:cost}), cheaper in every paired run, and to O-full; share of targets certified (\\sys{} / B5-shared).}\\label{tab:scale}",
-     "\\setlength{\\tabcolsep}{3pt}\\small\\begin{tabular}{llrrrr}\\toprule Data & $k$ & tuples & vs.\\ B5-sh. & vs.\\ O-full & met\\\\ \\midrule"]
+L = ["\\begin{table}[t]\\centering\\caption{\\sys's advantage over matched B5-shared grows with the data. Every tuple is replicated $k$ times with fresh random numbers ($\\epsilon=0.05$, human-oracle price, mean of %d paired runs): \\sys's cost relative to matched B5-shared (Table~\\ref{tab:cost}), cheaper in every paired run, and the share of targets certified (\\sys{} / B5-shared). Costs relative to O-full are in Fig.~\\ref{fig:phase}.}\\label{tab:scale}",
+     "\\setlength{\\tabcolsep}{3pt}\\small\\begin{tabular}{llrrr}\\toprule Data & $k$ & tuples & vs.\\ B5-sh. & met\\\\ \\midrule"]
 out = {}
 for lab, key in (("RMA", "rma"), ("Amazon-IS", "amazon2")):
     for k in (1, 2, 4, 8):
@@ -32,7 +32,7 @@ for lab, key in (("RMA", "rma"), ("Amazon-IS", "amazon2")):
         rec = dict(n=n, gamma=best, vs_b=m(sv / b), cheaper=float((sv < b).mean()), vs_of=m(sv) / (n * HUMAN), phi=nor / n,
                    met_s=met_s, met_b=met_b, cov=m([x["semview"]["quality"]["coverage_cons"] for x in runs]))
         out[f"{lab}|{k}"] = rec
-        L.append(f"{lab if k == 1 else ''} & {k} & {n:,} & {rec['vs_b']:.2f} & {rec['vs_of']:.2f} & {met_s:.2f} / {met_b:.2f}\\\\".replace(",", "{,}"))
+        L.append(f"{lab if k == 1 else ''} & {k} & {n:,} & {rec['vs_b']:.2f} & {met_s:.3f} / {met_b:.3f}\\\\".replace(",", "{,}"))
 L[0] = L[0] % len(runs)
 assert all(v["cheaper"] == 1.0 for v in out.values())
 L += ["\\bottomrule\\end{tabular}\\end{table}"]

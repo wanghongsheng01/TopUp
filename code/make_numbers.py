@@ -267,57 +267,76 @@ if len(v7) == 3:
                 pick[(lab, e, fam)] = ok[0] if ok else cands[-1]
     print("matched picks:", pick)
     json.dump({"|".join(k): v for k, v in pick.items()}, open(os.path.join(RES, "v7_picks.json"), "w"), indent=0)
-    # Table I with the matched rows
-    rows = [("semview", "\\sys"), ("p_only", "\\sys{} plan only"), ("b7", "B7 uniform"), ("cong", "Capped stratified"),
-            ("a_lazy", "A-lazy"), ("a_lazy*", "A-lazy, matched"), ("b6", "B6 SemViews-ad."), ("b5", "B5 Ladder+cache"),
-            ("b5shared", "B5-shared"), ("b5shared*", "B5-shared, matched"), ("b5ideal", "B5-ideal"), ("b4", "B4 Ladder")]
-    L = ["\\begin{table*}[t]\\centering\\caption{Total labelling cost over the 62-day horizon (human-oracle price, \\$0.05 per label; mean of %d runs) and, in parentheses, \\sys's cost relative to each method (paired). Rows marked \\emph{matched} raise the method's sample sizes (Section~\\ref{sec:setup}) until it certifies at least as many targets as \\sys{} with realised errors within $\\epsilon$ for at least 95\\%% of the queries, or to the largest factor tried if none does.}\\label{tab:cost}" % len(v7["RMA"]["05"]),
+    # Tables I and II: one cell per (dataset, eps, method) -> cost, paired ratio, validity; written to results/table_cells.json
+    # for the figures. Methods are grouped by whether they certify at least as many targets as TopUp ("upper block").
+    def src(m): return (lambda lab, e: v7[lab][e]) if (m.endswith("*") or m == "cong") else (lambda lab, e: have[lab][e])
+    def mname(m, lab, e): return pick[(lab, e, m[:-1])] if m.endswith("*") else m
+    CELL = {}
+    for lab in v7:
+        n_all = have[lab]["05"][0]["semview"]["counts"]["cheap_scan"]
+        ol = json.load(open(os.path.join(RES, f"olazy_{dict(DS)[lab]}.json")))["touched_mean"] * 0.05
+        for e in ("05", "10"):
+            sv = np.mean(tot(have[lab][e], "semview", "human_oracle"))
+            for m in ("semview", "p_only", "b7", "cong", "a_lazy", "a_lazy*", "b6", "b5", "b5shared", "b5shared*", "b5ideal", "b4"):
+                d = src(m)(lab, e); mm = mname(m, lab, e)
+                c = float(np.mean(tot(d, mm, "human_oracle"))); rr = ratio(d, mm, "human_oracle")
+                q = "b5" if m == "b4" else mm  # B4 draws the same per-query samples as B5 (same seed), so it answers identically
+                st = vstats(d if m != "b4" else have[lab][e], q, e)
+                CELL[(lab, e, m)] = dict(cost=c, ratio=rr, cov=float(st[0]), acc=float(st[1]), met=float(st[2]))
+            CELL[(lab, e, "ofull")] = dict(cost=n_all * 0.05, ratio=sv / (n_all * 0.05), cov=1.0, acc=1.0, met=1.0)
+            CELL[(lab, e, "olazy")] = dict(cost=ol, ratio=sv / ol, cov=1.0, acc=1.0, met=1.0)
+            pr = {}
+            for m in ("b5shared*", "a_lazy*"):
+                d = v7[lab][e]; pr[m] = list(map(float, tot(d, "semview", "human_oracle") / tot(d, mname(m, lab, e), "human_oracle")))
+            CELL[(lab, e, "paired")] = pr
+    json.dump({"|".join(k): v for k, v in CELL.items()}, open(os.path.join(RES, "table_cells.json"), "w"))
+    upper = [("semview", "\\sys"), ("a_lazy*", "A-lazy, matched"), ("b5shared*", "B5-shared, matched"), ("b7", "B7 uniform"),
+             ("cong", "Capped stratified"), ("olazy", "O-lazy (exact)"), ("ofull", "O-full (exact)")]
+    lower = [("p_only", "\\sys{} plan only"), ("a_lazy", "A-lazy"), ("b5shared", "B5-shared"), ("b5ideal", "B5-ideal"),
+             ("b5", "B5 Ladder+cache"), ("b6", "B6 SemViews-ad."), ("b4", "B4 Ladder")]
+    cols = [(lab, e) for lab in v7 for e in ("05", "10")]
+    elig = {cl: sorted([m for m, _ in upper if CELL[cl + (m,)]["met"] >= CELL[cl + ("semview",)]["met"] - 0.01 - 1e-9],
+                       key=lambda m: CELL[cl + (m,)]["cost"]) for cl in cols}
+    rank1 = sum(elig[cl][0] == "semview" for cl in cols)
+    mark = lambda txt, m, cl: ("\\textbf{%s}" % txt) if elig[cl][0] == m else (("\\underline{%s}" % txt) if len(elig[cl]) > 1 and elig[cl][1] == m else txt)
+    L = ["\\begin{table*}[t]\\centering\\caption{\\sys{} is the cheapest of all methods that certify as many targets as it does, in %d of %d settings. Total labelling cost over the 62-day horizon in dollars (human-oracle price, \\$0.05 per label; mean of %d runs) and, in parentheses, \\sys's cost relative to each method (paired runs). The upper block holds the methods whose share of certified targets is within 0.01 of \\sys's or higher (Table~\\ref{tab:basevalid}; exact methods certify every target); among them, bold marks the cheapest and underlining the second cheapest in each column. \\emph{Matched} rows raise the method's sample sizes (Section~\\ref{sec:setup}). B4 draws the same samples as B5.}\\label{tab:cost}" % (rank1, len(cols), len(v7["RMA"]["05"])),
          "\\small\\begin{tabular}{l" + "rr" * 3 + "}\\toprule",
          " & " + " & ".join(f"\\multicolumn{{2}}{{c}}{{{lab}}}" for lab in v7) + "\\\\",
          " & " + " & ".join("$\\epsilon=0.05$ & $\\epsilon=0.10$" for _ in v7) + "\\\\ \\midrule"]
-    for m, name in rows:
-        cells = []
-        for lab in v7:
-            for e in ("05", "10"):
-                mm = pick[(lab, e, m[:-1])] if m.endswith("*") else m
-                d = v7[lab][e] if (m.endswith("*") or m == "cong") else have[lab][e]
-                c = np.mean(tot(d, mm, "human_oracle")); rr = ratio(d, mm, "human_oracle")
-                cells.append(f"{c:,.0f}" + ("" if m == "semview" else f" ({rr:.2f})"))
-        L.append(f"{name} & " + " & ".join(cells) + "\\\\")
-    cells = []
-    for lab in v7:
-        n = have[lab]["05"][0]["semview"]["counts"]["cheap_scan"]
-        for e in ("05", "10"): cells.append(f"{n * 0.05:,.0f} ({np.mean(tot(have[lab][e], 'semview', 'human_oracle')) / (n * 0.05):.2f})")
-    L.append("O-full & " + " & ".join(cells) + "\\\\")
-    cells = []
-    for lab in v7:
-        ol = json.load(open(os.path.join(RES, f"olazy_{dict(DS)[lab]}.json")))["touched_mean"] * 0.05
-        for e in ("05", "10"): cells.append(f"{ol:,.0f} ({np.mean(tot(have[lab][e], 'semview', 'human_oracle')) / ol:.2f})")
-    L.append("O-lazy & " + " & ".join(cells) + "\\\\")
+    for blk in (upper, lower):
+        for m, name in blk:
+            cells = []
+            for cl in cols:
+                c = CELL[cl + (m,)]; txt = f"{c['cost']:,.0f}" + ("" if m == "semview" else f" ({c['ratio']:.2f})")
+                cells.append(mark(txt, m, cl) if blk is upper else txt)
+            L.append(f"{name} & " + " & ".join(cells) + "\\\\")
+        if blk is upper: L.append("\\midrule \\multicolumn{7}{l}{\\emph{Fewer targets certified than \\sys{}}}\\\\")
     L += ["\\bottomrule\\end{tabular}\\end{table*}"]
-    open(os.path.join(PAPER, "tables", "main_cost.tex"), "w").write("\n".join(L).replace(",", "{,}") + "\n")
-    # Table II for both targets, with the matched rows
-    vrows = [("semview", "\\sys"), ("p_only", "\\sys{} plan only"), ("b7", "B7 uniform"), ("cong", "Capped stratified"), ("a_lazy", "A-lazy"),
-             ("a_lazy*", "A-lazy, matched"), ("b5shared", "B5-shared"), ("b5shared*", "B5-shared, matched"), ("b5", "B5 Ladder+cache")]
-    VV = {}
-    for e in ("05", "10"):
-        for m, name in vrows:
-            for lab in v7:
-                mm = pick[(lab, e, m[:-1])] if m.endswith("*") else m
-                src = v7[lab][e] if (m.endswith("*") or m == "cong") else have[lab][e]
-                VV[(lab, e, m)] = vstats(src, mm, e)
+    open(os.path.join(PAPER, "tables", "main_cost.tex"), "w").write("\n".join(L).replace(",", "{,}").replace("\\multicolumn{7}{l}{\\emph{Fewer targets certified than \\sys{}}}", "\\multicolumn{7}{l}{\\emph{Fewer targets certified than \\sys{}}}") + "\n")
+    # Table II: validity of every sampling method, 3 decimals throughout; bold/underline = best/second in each column
+    vrows = [("semview", "\\sys"), ("a_lazy*", "A-lazy, matched"), ("b5shared*", "B5-shared, matched"), ("b7", "B7 uniform"),
+             ("cong", "Capped stratified"), ("p_only", "\\sys{} plan only"), ("a_lazy", "A-lazy"), ("b5shared", "B5-shared"),
+             ("b5", "B5/B4 Ladder")]
+    VV = {cl + (m,): (CELL[cl + (m,)]["cov"], CELL[cl + (m,)]["acc"], CELL[cl + (m,)]["met"]) for cl in cols for m, _ in vrows}
     covs = [v[0] for v in VV.values()]
-    L = ["\\begin{table*}[t]\\centering\\caption{Validity at equal targets (mean of %d runs): share of queries whose realised error is within $\\epsilon$ (acc.) and share of T1/T2/T4 targets whose certified half-width is within $\\epsilon$ (met). Per-query planners use the sample-variance interval of~\\cite{ladder}, floored by the pilot moments. The floored 95\\%% intervals of all methods cover at %.3f--%.3f.}\\label{tab:basevalid}" % (len(v7["RMA"]["05"]), min(covs), max(covs)),
-         "\\setlength{\\tabcolsep}{4pt}\\small\\begin{tabular}{l" + "rrrr" * 3 + "}\\toprule",
+    def mk(v, col):
+        r = sorted({round(x, 3) for x in col}, reverse=True); v3 = round(v, 3)
+        return ("\\textbf{%.3f}" % v) if v3 == r[0] else (("\\underline{%.3f}" % v) if len(r) > 1 and v3 == r[1] else "%.3f" % v)
+    L = ["\\begin{table*}[t]\\centering\\caption{Validity at equal targets (mean of %d runs): share of queries whose realised error is within $\\epsilon$ (acc.) and share of T1/T2/T4 targets whose certified half-width is within $\\epsilon$ (met); bold and underlining mark the best and second-best value in each column. Per-query planners use the sample-variance interval of~\\cite{ladder}, floored by the pilot moments. The floored 95\\%% intervals of all methods cover at %.3f--%.3f.}\\label{tab:basevalid}" % (len(v7["RMA"]["05"]), min(covs), max(covs)),
+         "\\setlength{\\tabcolsep}{3.5pt}\\small\\begin{tabular}{l" + "rrrr" * 3 + "}\\toprule",
          " & " + " & ".join(f"\\multicolumn{{4}}{{c}}{{{lab}}}" for lab in v7) + "\\\\",
          " " + "".join(f"\\cmidrule(lr){{{2 + 4 * i}-{5 + 4 * i}}}" for i in range(3)),
          " & " + " & ".join("\\multicolumn{2}{c}{$\\epsilon=0.05$} & \\multicolumn{2}{c}{$\\epsilon=0.10$}" for _ in v7) + "\\\\",
          "Method & " + " & ".join("acc. & met & acc. & met" for _ in v7) + "\\\\ \\midrule"]
     for m, name in vrows:
-        cells = [f"{VV[(lab, e, m)][1]:.3f} & {VV[(lab, e, m)][2]:.2f}" for lab in v7 for e in ("05", "10")]
+        cells = []
+        for cl in cols:
+            cells.append(mk(VV[cl + (m,)][1], [VV[cl + (x,)][1] for x, _ in vrows]) + " & " + mk(VV[cl + (m,)][2], [VV[cl + (x,)][2] for x, _ in vrows]))
         L.append(f"{name} & " + " & ".join(cells) + "\\\\")
+        if m == "cong": L.append("\\midrule")
     L += ["\\bottomrule\\end{tabular}\\end{table*}"]
     open(os.path.join(PAPER, "tables", "basevalid.tex"), "w").write("\n".join(L) + "\n")
+    VV = {(lab, e, m): VV[(lab, e, m)] for (lab, e, m) in VV}
     rng7 = lambda xs, d=2: f"{min(xs):.{d}f}" if f"{min(xs):.{d}f}" == f"{max(xs):.{d}f}" else f"{min(xs):.{d}f}--{max(xs):.{d}f}"
     with open(os.path.join(PAPER, "numbers.tex"), "a") as fh:
         for m, tag in (("b5shared*", "BFiveSharedMatched"), ("a_lazy*", "ALazyMatched"), ("cong", "Cong")):
